@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Regenradar</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; background: #0e1420; color: #e8edf5; }
+  #map { position: absolute; inset: 0; }
+
+  .panel {
+    position: absolute; z-index: 1000;
+    background: rgba(14, 20, 32, .88); backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,.12); border-radius: 14px;
+    padding: 12px 14px; box-shadow: 0 8px 24px rgba(0,0,0,.5);
+  }
+  #top-panel { top: 12px; left: 12px; right: 12px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  #bottom-panel { left: 50%; transform: translateX(-50%); bottom: 12px; width: min(640px, calc(100vw - 24px)); }
+
+  button, select {
+    background: #1d2a40; color: #e8edf5; border: 1px solid rgba(255,255,255,.18);
+    border-radius: 8px; padding: 7px 12px; font-size: 14px; cursor: pointer;
+  }
+  button:hover { background: #27395a; }
+  button.primary { background: #2f6fed; border-color: #2f6fed; }
+  button.primary:hover { background: #4a82f0; }
+
+  #radius-slider { width: 160px; accent-color: #2f6fed; }
+  .lbl { font-size: 13px; opacity: .8; }
+  #radius-val { font-size: 13px; font-weight: 600; min-width: 52px; }
+
+  #timeline { width: 100%; accent-color: #2f6fed; }
+  #frame-time { font-size: 15px; font-weight: 700; }
+  #frame-kind { font-size: 12px; padding: 2px 8px; border-radius: 999px; margin-left: 8px; }
+  .kind-past { background: #33415c; }
+  .kind-now { background: #2f6fed; }
+  .kind-nowcast { background: #b45309; }
+  #note { font-size: 12px; opacity: .75; margin-top: 6px; }
+  #legend { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 11px; opacity: .85; }
+  #legend-bar { height: 8px; border-radius: 4px; width: 160px;
+    background: linear-gradient(90deg,#2ee86e,#3fc3f0,#3a55f0,#f4d03f,#f0852e,#c0392b,#c016c0); }
+
+  #status { font-size: 13px; opacity: .85; }
+  @media (max-width: 600px) { #top-panel { gap: 8px; } #radius-slider { width: 110px; } }
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="top-panel" class="panel">
+  <button class="primary" id="btn-locate" title="Zum aktuellen Standort zentrieren">📍 Standort</button>
+  <span class="lbl">Radius:</span>
+  <input id="radius-slider" type="range" min="10" max="150" step="5" value="50">
+  <span id="radius-val">50 km</span>
+  <span class="lbl" id="status">Standort wird ermittelt…</span>
+</div>
+
+<div id="bottom-panel" class="panel">
+  <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+    <button id="btn-play">⏸ Pause</button>
+    <input id="timeline" type="range" min="0" max="0" step="1" value="0" style="flex:1; min-width:180px;">
+    <span id="frame-time">–</span><span id="frame-kind" class="kind-past">–</span>
+  </div>
+  <div id="legend"><span>Schwache Regenschauer</span><div id="legend-bar"></div><span>Starker Regen / Gewitter</span></div>
+  <div id="note">Quelle: RainViewer (Radar + Infrarot-Satellitenwolken). Der Radarnowcast wird vom Anbieter nur ca. 30 Minuten in die Zukunft berechnet; unverfügbare Vorhersage-Zeitschritte werden beim Abspielen übersprungen.</div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(() => {
+  "use strict";
+
+  // ---- Regenschauer states gespeichert, damit Standort/Frames bei Reload erhalten bleiben ----
+  const state = {
+    radius: Number(localStorage.getItem("rr_radius") || 50),   // km
+    lat: null, lon: null,
+    frames: [],        // {time (ms), path, kind: 'past'|'nowcast'|'sat'}
+    idx: 0,
+    playing: true,
+    timer: null,
+    radarLayers: new Map(),   // key: path+kind -> L.TileLayer
+    satLayers: new Map(),
+    showSatellite: true
+  };
+
+  // ---- Karte ----
+  const map = L.map("map", { zoomControl: true, attributionControl: true }).setView([51.16, 10.45], 6);
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+    attribution: "© OpenStreetMap, © CARTO · Radar: RainViewer",
+    subdomains: "abcd", maxZoom: 19
+  }).addTo(map);
+
+  let circle = null, marker = null;
+
+  function setRadius(km) {
+    state.radius = km;
+    localStorage.setItem("rr_radius", String(km));
+    document.getElementById("radius-slider").value = km;
+    document.getElementById("radius-val").textContent = km + " km";
+    if (circle) circle.setRadius(km * 1000);
+  }
+
+  function setLocation(lat, lon, label) {
+    state.lat = lat; state.lon = lon;
+    document.getElementById("status").textContent = label || (lat.toFixed(4) + ", " + lon.toFixed(4));
+    const ll = [lat, lon];
+    map.setView(ll, Math.max(map.getZoom(), 9));
+    if (!marker) marker = L.circleMarker(ll, { radius: 6, color: "#fff", fillColor: "#2f6fed", fillOpacity: 1, weight: 2 }).addTo(map);
+    else marker.setLatLng(ll);
+    if (!circle) circle = L.circle(ll, { radius: state.radius * 1000, color: "#2f6fed", weight: 2, fill: false, dashArray: "6 6", interactive: false }).addTo(map);
+    else circle.setLatLng(ll);
+  }
+
+  function locate() {
+    if (!navigator.geolocation) { document.getElementById("status").textContent = "Geolokation nicht verfügbar – bitte Karte antippen."; return; }
+    document.getElementById("status").textContent = "Standort wird ermittelt…";
+    navigator.geolocation.getCurrentPosition(
+      p => setLocation(p.coords.latitude, p.coords.longitude, "Standort ermittelt ✓"),
+      () => { document.getElementById("status").textContent = "Standort verweigert – bitte Karte antippen."; },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+    );
+  }
+
+  document.getElementById("btn-locate").addEventListener("click", locate);
+  document.getElementById("radius-slider").addEventListener("input", e => setRadius(Number(e.target.value)));
+  // Klick auf die Karte wählt manuell eine Position
+  map.on("click", e => setLocation(e.latlng.lat, e.latlng.lng));
+
+  // ---- Tile-URLs (RainViewer-API) ----
+  function radarUrl(host, path, smooth) {
+    return host + path + "/512/{z}/{x}/{y}/4/" + (smooth ? "1_1" : "0_0") + ".png";
+  }
+  function satUrl(host, path) {
+    return host + path + "/512/{z}/{x}/{y}/0/0_0.png";
+  }
+
+  function showFrame(idx) {
+    const frames = state.frames;
+    if (!frames.length) return;
+    state.idx = idx = ((idx % frames.length) + frames.length) % frames.length;
+    const f = frames[idx];
+
+    function setLayer(mapRef, key, url, opacity) {
+      for (const [k, layer] of mapRef) if (k !== key && map.hasLayer(layer)) { layer.setOpacity(0); }
+      let layer = mapRef.get(key);
+      if (!layer) {
+        layer = L.tileLayer(url, { opacity: 0, zIndex: (f.kind === "sat" ? 300 : 400), interactive: false });
+        mapRef.set(key, layer);
+        layer.addTo(map);
+      }
+      layer.setOpacity(opacity);
+    }
+    // Radarebene zeigen (past + nowcast), Satelliten dezent dahinter
+    setLayer(state.radarLayers, f.path, radarUrl(f.host, f.path, true), 0.75);
+    // Satellitenbild: eigenes Frame mit passendem Zeitstempel wählen
+    const sat = closestFrame(satFrames, f.time);
+    if (sat && state.showSatellite) setLayer(state.satLayers, sat.path, satUrl(sat.host, sat.path), 0.35);
+    else { for (const [, l] of state.satLayers) l.setOpacity(0); }
+
+    document.getElementById("timeline").value = String(idx);
+    const d = new Date(f.time);
+    document.getElementById("frame-time").textContent =
+      d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+    const rel = Math.round((f.time - Date.now()) / 60000);
+    let kindTxt = rel < -5 ? "Vergangenheit" : rel <= 5 ? "Jetzt" : "Nowcast +" + rel + " min";
+    if (f.kind !== "radar") kindTxt += " (Wolkenfeld)";
+    const kindEl = document.getElementById("frame-kind");
+    kindEl.textContent = kindTxt;
+    kindEl.className = rel > 5 ? "kind-nowcast" : rel >= -5 ? "kind-now" : "kind-past";
+  }
+
+  function closestFrame(list, t) {
+    if (!list || !list.length) return null;
+    let best = list[0];
+    for (const f of list) if (Math.abs(f.time - t) < Math.abs(best.time - t)) best = f;
+    return best;
+  }
+
+  // ---- RainViewer-Daten laden ----
+  let satFrames = [];
+
+  async function loadFrames() {
+    document.getElementById("status").textContent = "Radar-Daten laden…";
+    const res = await fetch("https://api.rainviewer.com/public/weather-maps.json");
+    const data = await res.json();
+    const host = data.host || "https://tilecache.rainviewer.com";
+
+    const wrap = arr => (arr || []).map(f => ({ host, time: f.time * 1000, path: f.path, kind: f.kind }));
+    const past = wrap(data.radar?.past).map(f => ({ ...f, kind: "past" }));
+    const nowcast = wrap(data.radar?.nowcast).map(f => ({ ...f, kind: "nowcast" }));
+    state.frames = [...past, ...nowcast].sort((a, b) => a.time - b.time);
+    satFrames = wrap(data.satellite?.infrared);
+
+    const tl = document.getElementById("timeline");
+    tl.max = String(state.frames.length - 1);
+    // Startpunkt: nächster Frame zur aktuellen Zeit
+    const now = Date.now();
+    let start = state.frames.findIndex(f => f.time >= now);
+    if (start < 0) start = state.frames.length - 1;
+    tl.disabled = false;
+    showFrame(start);
+    document.getElementById("status").textContent =
+      state.lat == null ? "Standort: bitte erlauben oder Karte antippen" : "Radar aktuell ✓";
+  }
+
+  document.getElementById("timeline").addEventListener("input", e => {
+    pause(); showFrame(Number(e.target.value));
+  });
+
+  // ---- Animation ----
+  function play() {
+    state.playing = true;
+    document.getElementById("btn-play").textContent = "⏸ Pause";
+    state.timer = setInterval(() => showFrame(state.idx + 1), 800);
+  }
+  function pause() {
+    state.playing = false;
+    document.getElementById("btn-play").textContent = "▶ Abspielen";
+    if (state.timer) { clearInterval(state.timer); state.timer = null; }
+  }
+  document.getElementById("btn-play").addEventListener("click", () => state.playing ? pause() : play());
+
+  setInterval(loadFrames, 5 * 60 * 1000); // alle 5 Minuten auffrischen
+
+  // ---- Start ----
+  setRadius(state.radius);
+  loadFrames().then(() => {
+    locate();
+    play();
+  }).catch(() => {
+    document.getElementById("status").textContent = "Radar-Daten konnten nicht geladen werden.";
+  });
+})();
+</script>
+</body>
+</html>
