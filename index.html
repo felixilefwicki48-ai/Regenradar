@@ -53,6 +53,10 @@
     background: linear-gradient(90deg,#9be7ff,#3fa0f0,#2255d8,#27b34b,#f4d03f,#f0852e,#d63a2f,#b21fb2); }
   #note { font-size: 11px; opacity: .65; margin-top: 6px; line-height: 1.35; }
 
+  /* OSM-Karte abdunkeln; das Radar liegt in einer eigenen Ebene und bleibt farbecht */
+  .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.85) contrast(.9) saturate(.6); }
+  .leaflet-container { background: #0e1420; }
+
   @media (pointer: coarse) { .leaflet-control-zoom { display: none; } }
 </style>
 </head>
@@ -80,7 +84,7 @@
     <span id="frame-time">–</span><span id="frame-kind" class="kind-past">–</span>
   </div>
   <div id="legend"><span>schwach</span><div id="legend-bar"></div><span>stark / Gewitter</span></div>
-  <div id="note">Radar und Radarvorhersage: Deutscher Wetterdienst (DWD), 15-Minuten-Schritte. Karte: © OpenStreetMap, © CARTO. Orte: Open-Meteo.</div>
+  <div id="note">Radar und Radarvorhersage: Deutscher Wetterdienst (DWD), 15-Minuten-Schritte. Karte: © OpenStreetMap-Mitwirkende. Orte: Open-Meteo.</div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -113,9 +117,7 @@
   // ---------- Karte ----------
   const map = L.map('map', { attributionControl: false, zoomControl: true }).setView([DEFAULT_PLACE.lat, DEFAULT_PLACE.lon], 8);
   map.zoomControl.setPosition('bottomright');
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-    subdomains: 'abcd', maxZoom: 12
-  }).addTo(map);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 12 }).addTo(map);
   const marker = L.circleMarker([DEFAULT_PLACE.lat, DEFAULT_PLACE.lon],
     { radius: 6, color: '#fff', fillColor: '#2f6fed', fillOpacity: 1, weight: 2 }).addTo(map);
   const circle = L.circle([DEFAULT_PLACE.lat, DEFAULT_PLACE.lon],
