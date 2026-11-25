@@ -56,6 +56,10 @@
   /* OSM-Karte abdunkeln; das Radar liegt in einer eigenen Ebene und bleibt farbecht */
   .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.85) contrast(.9) saturate(.6); }
   .leaflet-container { background: #0e1420; }
+  /* Satellitenwolken: Schwarz wird durchsichtig, Wolken erscheinen hell */
+  .leaflet-cloud-pane { mix-blend-mode: screen; filter: contrast(1.5) brightness(.9); }
+  #cloudinfo { display: none; font-size: 11px; opacity: .8; margin-top: 6px; }
+  button.on { background: #2f6fed; border-color: #2f6fed; }
 
   @media (pointer: coarse) { .leaflet-control-zoom { display: none; } }
 </style>
@@ -69,6 +73,7 @@
     <input id="q" type="search" placeholder="Ort oder PLZ suchen …" enterkeyhint="search">
     <button id="btn-search">Suchen</button>
     <button class="primary" id="btn-locate" title="Mein Standort">📍</button>
+    <button id="btn-cloud" title="Wolken (Satellit) ein/aus">☁ Wolken</button>
     <span class="lbl">Radius</span>
     <input id="radius-slider" type="range" min="10" max="150" step="5" value="50">
     <span id="radius-val">50 km</span>
@@ -84,6 +89,7 @@
     <span id="frame-time">–</span><span id="frame-kind" class="kind-past">–</span>
   </div>
   <div id="legend"><span>schwach</span><div id="legend-bar"></div><span>stark / Gewitter</span></div>
+  <div id="cloudinfo"></div>
   <div id="note">Radar und Radarvorhersage: Deutscher Wetterdienst (DWD), 15-Minuten-Schritte. Karte: © OpenStreetMap-Mitwirkende. Orte: Open-Meteo.</div>
 </div>
 
@@ -124,6 +130,7 @@
     { radius: state.radius * 1000, color: '#2f6fed', weight: 2, fill: false, dashArray: '6 6', interactive: false }).addTo(map);
   // Radar über der Grundkarte, aber unter Marker
   map.createPane('radar'); map.getPane('radar').style.zIndex = 350; map.getPane('radar').style.pointerEvents = 'none';
+  map.createPane('cloud'); map.getPane('cloud').style.zIndex = 340; map.getPane('cloud').style.pointerEvents = 'none';
 
   function fitRadius() { map.fitBounds(circle.getBounds(), { padding: [30, 30], maxZoom: 11 }); }
 
@@ -240,6 +247,7 @@
     i = ((i % fr.length) + fr.length) % fr.length;
     state.idx = i;
     fr.forEach((f, k) => f.layer.setOpacity(k === i ? OPACITY : 0));
+    applyCloud(i);
     $('timeline').value = i;
     const t = fr[i].t;
     $('frame-time').textContent = fmt(t) + ' Uhr';
@@ -289,6 +297,7 @@
         if (Math.abs(fresh[best].t - prevT) <= STEP_MIN * 60000) i = best;
       }
       show(i);
+      if (cloud.on) updateCloud();
 
       const hasFc = end > now + 7 * 60000;
       $('status').textContent = (placeLabel ? placeLabel + ' · ' : '') +
@@ -298,6 +307,88 @@
       $('status').textContent = 'Radar konnte nicht geladen werden (' + e.message + ').';
     }
   }
+
+  // ---------- Wolken (Satellit, EUMETSAT) ----------
+  const EUM_WMS = 'https://view.eumetsat.int/geoserver/wms';
+  const CLOUD_OPACITY = 0.65;
+  const cloud = { on: false, layers: new Map() };   // Zeit (ms) -> Ebene
+  const isoTime = t => new Date(t).toISOString().replace('.000Z', 'Z');
+
+  async function getCloudMeta() {
+    const r = await fetch(EUM_WMS + '?service=WMS&version=1.3.0&request=GetCapabilities');
+    const doc = new DOMParser().parseFromString(await r.text(), 'text/xml');
+    const txt = (l, tag) => { const n = l.querySelector(':scope > ' + tag); return n ? n.textContent : ''; };
+    const hits = [];
+    Array.from(doc.getElementsByTagName('Layer')).forEach(l => {
+      const name = txt(l, 'Name');
+      const dim = l.querySelector('Dimension[name="time"]') || l.querySelector('Dimension');
+      if (!name || !dim) return;
+      // Infrarot-Kanal 10,8 / 10,5 µm: zeigt Wolken Tag und Nacht
+      if (/ir\s?[-_]?10[58]/i.test(name + ' ' + txt(l, 'Title')) && !/rgb|airmass|dust|ash|fog|snow/i.test(name)) {
+        hits.push({ name, times: parseDim(dim.textContent) });
+      }
+    });
+    hits.sort((a, b) => a.name.length - b.name.length);
+    const best = hits.find(h => h.times.length);
+    if (!best) throw new Error('keine Satellitenebene gefunden');
+    return best;
+  }
+
+  async function updateCloud() {
+    try {
+      const m = await getCloudMeta();
+      const now = Date.now();
+      const past = m.times.filter(t => t <= now);
+      const needed = new Set();
+      state.frames.forEach(f => {
+        let t = null;
+        past.forEach(x => { if (x <= f.t) t = x; });   // jüngstes Bild vor/bei dem Radarzeitpunkt
+        if (t === null) t = past.length ? past[0] : m.times[0];
+        f.ct = t; needed.add(t);
+      });
+      needed.forEach(t => {
+        if (!cloud.layers.has(t)) {
+          cloud.layers.set(t, L.tileLayer.wms(EUM_WMS, {
+            layers: m.name, format: 'image/png', transparent: true, version: '1.3.0',
+            time: isoTime(t), opacity: 0, pane: 'cloud', keepBuffer: 4
+          }).addTo(map));
+        }
+      });
+      cloud.layers.forEach((l, t) => { if (!needed.has(t)) { map.removeLayer(l); cloud.layers.delete(t); } });
+      const last = past.length ? past[past.length - 1] : m.times[m.times.length - 1];
+      const ci = $('cloudinfo');
+      ci.style.display = 'block';
+      ci.textContent = '☁ Satellit (Infrarot, EUMETSAT): letztes Bild ' + fmt(last) + ' Uhr – Messung, keine Wolkenprognose; bei Prognosebildern bleibt das letzte Satellitenbild stehen.';
+      applyCloud(state.idx);
+    } catch (e) {
+      setCloud(false);
+      $('cloudinfo').style.display = 'block';
+      $('cloudinfo').textContent = '☁ Wolken nicht verfügbar (' + e.message + ').';
+    }
+  }
+
+  function applyCloud(i) {
+    cloud.layers.forEach(l => l.setOpacity(0));
+    const f = state.frames[i];
+    if (cloud.on && f && f.ct != null) {
+      const l = cloud.layers.get(f.ct);
+      if (l) l.setOpacity(CLOUD_OPACITY);
+    }
+  }
+
+  function setCloud(on) {
+    cloud.on = on;
+    $('btn-cloud').classList.toggle('on', on);
+    if (!on) {
+      cloud.layers.forEach(l => map.removeLayer(l));
+      cloud.layers.clear();
+      $('cloudinfo').style.display = 'none';
+    }
+  }
+  $('btn-cloud').onclick = () => {
+    setCloud(!cloud.on);
+    if (cloud.on) { $('cloudinfo').style.display = 'block'; $('cloudinfo').textContent = '☁ Lade Satellitenbilder …'; updateCloud(); }
+  };
 
   // ---------- Animation ----------
   function schedule() {
