@@ -6,208 +6,325 @@
 <title>Regenradar</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
-  :root { --bg:#fff; --fg:#1b1f24; --muted:#667; --card:#f2f4f7; --acc:#1a73e8; }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg:#14171a; --fg:#e8eaed; --muted:#9aa0a6; --card:#22262b; --acc:#6ea8ff; }
-  }
+  :root { color-scheme: dark; }
   * { box-sizing: border-box; }
-  html, body { height: 100%; margin: 0; }
-  body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--fg);
-         display: flex; flex-direction: column; }
-  header { display: flex; gap: 6px; padding: 8px; background: var(--card); }
-  header input { flex: 1; min-width: 0; padding: 8px 10px; border-radius: 8px;
-                 border: 1px solid #8884; background: var(--bg); color: var(--fg); font-size: 16px; }
-  button { border: 0; border-radius: 8px; padding: 8px 12px; background: var(--acc);
-           color: #fff; font-size: 16px; cursor: pointer; }
-  #map { flex: 1; min-height: 0; }
-  footer { padding: 8px 12px 12px; background: var(--card); }
-  .row { display: flex; align-items: center; gap: 10px; }
-  #slider { flex: 1; }
-  #time { font-weight: 600; min-width: 130px; text-align: right; font-variant-numeric: tabular-nums; }
-  #status { color: var(--muted); font-size: 13px; margin-top: 4px; }
-  .legend { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin-top: 6px; }
-  .legend i { display: inline-block; width: 34px; height: 8px; border-radius: 4px;
-              background: linear-gradient(90deg,#9ee,#4ae,#25c,#2a2,#fd0,#f80,#e22,#a0a); }
-  #results { position: absolute; z-index: 1000; top: 52px; left: 8px; right: 8px;
-             background: var(--card); border-radius: 8px; display: none; overflow: hidden; }
-  #results div { padding: 10px 12px; cursor: pointer; border-bottom: 1px solid #8883; }
+  html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; background: #0e1420; color: #e8edf5; }
+  #map { position: absolute; inset: 0; }
+
+  .panel {
+    background: rgba(14, 20, 32, .88); backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,.12); border-radius: 14px;
+    padding: 12px 14px; box-shadow: 0 8px 24px rgba(0,0,0,.5);
+  }
+  #top { position: absolute; z-index: 1000; top: 12px; left: 12px; right: 12px; }
+  #top-panel { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  #bottom-panel { position: absolute; z-index: 1000; left: 50%; transform: translateX(-50%);
+                  bottom: 12px; width: min(640px, calc(100vw - 24px)); }
+
+  button {
+    background: #1d2a40; color: #e8edf5; border: 1px solid rgba(255,255,255,.18);
+    border-radius: 8px; padding: 7px 12px; font-size: 14px; cursor: pointer;
+  }
+  button:hover { background: #27395a; }
+  button.primary { background: #2f6fed; border-color: #2f6fed; }
+  button.primary:hover { background: #4a82f0; }
+  input[type=search] {
+    flex: 1; min-width: 140px; padding: 8px 10px; border-radius: 8px; font-size: 16px;
+    border: 1px solid rgba(255,255,255,.18); background: #111a2b; color: #e8edf5;
+  }
+  #radius-slider { width: 120px; accent-color: #2f6fed; }
+  .lbl { font-size: 13px; opacity: .8; }
+  #radius-val { font-size: 13px; font-weight: 600; min-width: 48px; }
+  #status { font-size: 13px; opacity: .85; flex-basis: 100%; }
+
+  #results { display: none; margin-top: 6px; padding: 4px 0; overflow: hidden; }
+  #results div { padding: 10px 14px; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,.08); }
+  #results div:last-child { border-bottom: 0; }
+  #results div:hover { background: #27395a; }
+
+  #timeline { flex: 1; min-width: 150px; accent-color: #2f6fed; }
+  #frame-time { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  #frame-kind { font-size: 12px; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+  .kind-past { background: #33415c; }
+  .kind-now { background: #2f6fed; }
+  .kind-fc { background: #b45309; }
+  #legend { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 11px; opacity: .85; }
+  #legend-bar { height: 8px; border-radius: 4px; width: 140px;
+    background: linear-gradient(90deg,#9be7ff,#3fa0f0,#2255d8,#27b34b,#f4d03f,#f0852e,#d63a2f,#b21fb2); }
+  #note { font-size: 11px; opacity: .65; margin-top: 6px; line-height: 1.35; }
+
+  @media (pointer: coarse) { .leaflet-control-zoom { display: none; } }
 </style>
 </head>
 <body>
-<header>
-  <input id="q" type="search" placeholder="Ort oder PLZ suchen …" enterkeyhint="search">
-  <button id="go">Suchen</button>
-  <button id="loc" title="Mein Standort">📍</button>
-</header>
-<div id="results"></div>
+
 <div id="map"></div>
-<footer>
-  <div class="row">
-    <button id="play">⏸</button>
-    <input id="slider" type="range" min="0" max="0" value="0">
-    <span id="time">–</span>
+
+<div id="top">
+  <div id="top-panel" class="panel">
+    <input id="q" type="search" placeholder="Ort oder PLZ suchen …" enterkeyhint="search">
+    <button id="btn-search">Suchen</button>
+    <button class="primary" id="btn-locate" title="Mein Standort">📍</button>
+    <span class="lbl">Radius</span>
+    <input id="radius-slider" type="range" min="10" max="150" step="5" value="50">
+    <span id="radius-val">50 km</span>
+    <span id="status">Radar wird geladen …</span>
   </div>
-  <div id="status">Lade Radar …</div>
-  <div class="legend">schwach <i></i> stark · Radar: Deutscher Wetterdienst</div>
-</footer>
+  <div id="results" class="panel"></div>
+</div>
+
+<div id="bottom-panel" class="panel">
+  <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+    <button id="btn-play">⏸</button>
+    <input id="timeline" type="range" min="0" max="0" step="1" value="0">
+    <span id="frame-time">–</span><span id="frame-kind" class="kind-past">–</span>
+  </div>
+  <div id="legend"><span>schwach</span><div id="legend-bar"></div><span>stark / Gewitter</span></div>
+  <div id="note">Radar und Radarvorhersage: Deutscher Wetterdienst (DWD), 15-Minuten-Schritte. Karte: © OpenStreetMap, © CARTO. Orte: Open-Meteo.</div>
+</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
-const WMS = 'https://maps.dwd.de/geoserver/dwd/wms';
-// Kandidaten: Radar mit Vorhersage zuerst, reines Messradar nur als Rückfall
-const CANDIDATES = ['dwd:Radar_rv_product_1x1km_ger', 'dwd:Radar_wn-product_1x1km_ger', 'dwd:Niederschlagsradar'];
-const STEP_MIN = 15;      // Schrittweite
-const BACK_MIN = 60;      // 1 Stunde zurück, dazu bis zu 2 Stunden Prognose
-const OPACITY = 0.75;
+(() => {
+  "use strict";
 
-const map = L.map('map', { zoomControl: true }).setView([54.09, 12.13], 8); // Rostock
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 12, attribution: '© OpenStreetMap'
-}).addTo(map);
-let marker = L.marker([54.09, 12.13]).addTo(map);
+  // ---------- Einstellungen ----------
+  const WMS = 'https://maps.dwd.de/geoserver/dwd/wms';
+  // Radar mit Vorhersage zuerst, reines Messradar nur als Rückfall
+  const CANDIDATES = ['dwd:Radar_rv_product_1x1km_ger', 'dwd:Radar_wn-product_1x1km_ger', 'dwd:Niederschlagsradar'];
+  const STEP_MIN = 15;          // Schrittweite
+  const BACK_MIN = 60;          // 1 Stunde zurück
+  const FWD_MIN = 125;          // bis ca. 2 Stunden voraus
+  const OPACITY = 0.8;
+  const DEFAULT_PLACE = { lat: 54.09, lon: 12.13, label: 'Rostock' };
 
-let frames = [];   // { t, layer }
-let idx = 0, timer = null, playing = true;
+  const $ = id => document.getElementById(id);
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+  };
 
-const $ = id => document.getElementById(id);
-const fmt = ms => new Date(ms).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  const state = {
+    radius: Number(store.get('rr_radius')) || 50,
+    frames: [],            // { t, layer }
+    idx: 0, playing: true, timer: null
+  };
 
-function parseDim(text) {
-  const out = [];
-  text.split(',').forEach(part => {
-    part = part.trim();
-    if (!part) return;
-    const p = part.split('/');
-    if (p.length >= 2) {
-      const a = Date.parse(p[0]), b = Date.parse(p[1]);
-      const m = /PT(\d+)M/.exec(p[2] || '');
-      const step = (m ? +m[1] : 5) * 60000;
-      for (let t = a; t <= b; t += step) out.push(t);
-    } else out.push(Date.parse(part));
-  });
-  return out.filter(Number.isFinite).sort((x, y) => x - y);
-}
+  // ---------- Karte ----------
+  const map = L.map('map', { attributionControl: false, zoomControl: true }).setView([DEFAULT_PLACE.lat, DEFAULT_PLACE.lon], 8);
+  map.zoomControl.setPosition('bottomright');
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    subdomains: 'abcd', maxZoom: 12
+  }).addTo(map);
+  const marker = L.circleMarker([DEFAULT_PLACE.lat, DEFAULT_PLACE.lon],
+    { radius: 6, color: '#fff', fillColor: '#2f6fed', fillOpacity: 1, weight: 2 }).addTo(map);
+  const circle = L.circle([DEFAULT_PLACE.lat, DEFAULT_PLACE.lon],
+    { radius: state.radius * 1000, color: '#2f6fed', weight: 2, fill: false, dashArray: '6 6', interactive: false }).addTo(map);
+  // Radar über der Grundkarte, aber unter Marker
+  map.createPane('radar'); map.getPane('radar').style.zIndex = 350; map.getPane('radar').style.pointerEvents = 'none';
 
-async function getTimes() {
-  const r = await fetch(WMS + '?service=WMS&version=1.3.0&request=GetCapabilities');
-  const doc = new DOMParser().parseFromString(await r.text(), 'text/xml');
-  const layers = Array.from(doc.getElementsByTagName('Layer'));
-  const nameOf = l => { const n = l.querySelector(':scope > Name'); return n ? n.textContent : ''; };
-  // Name kann mit oder ohne Präfix "dwd:" erscheinen
-  const strip = s => s.replace(/^dwd:/, '').toLowerCase();
-  let best = null;
-  CANDIDATES.forEach(c => {
-    const l = layers.find(x => strip(nameOf(x)) === strip(c));
-    if (!l) return;
-    const dim = l.querySelector('Dimension[name="time"]') || l.querySelector('Dimension');
-    if (!dim) return;
-    const times = parseDim(dim.textContent);
-    if (!times.length) return;
-    // Ebene mit dem spätesten Zeitpunkt (= weiteste Prognose) gewinnt
-    if (!best || times[times.length - 1] > best.times[best.times.length - 1] + 60000) {
-      best = { name: nameOf(l), times };
+  function fitRadius() { map.fitBounds(circle.getBounds(), { padding: [30, 30], maxZoom: 11 }); }
+
+  function setRadius(km) {
+    state.radius = km;
+    store.set('rr_radius', String(km));
+    $('radius-slider').value = km;
+    $('radius-val').textContent = km + ' km';
+    circle.setRadius(km * 1000);
+  }
+
+  let placeLabel = '';
+  function setPlace(lat, lon, label, fit) {
+    marker.setLatLng([lat, lon]);
+    circle.setLatLng([lat, lon]);
+    placeLabel = label || (lat.toFixed(3) + ', ' + lon.toFixed(3));
+    $('status').textContent = placeLabel;
+    store.set('rr_place', JSON.stringify({ lat, lon, label: label || '' }));
+    if (fit === false) map.panTo([lat, lon]); else fitRadius();
+  }
+
+  // ---------- Ortssuche ----------
+  async function search() {
+    const q = $('q').value.trim();
+    if (!q) return;
+    const box = $('results');
+    box.innerHTML = '';
+    try {
+      const r = await fetch('https://geocoding-api.open-meteo.com/v1/search?name=' +
+        encodeURIComponent(q) + '&count=5&language=de&format=json');
+      const j = await r.json();
+      if (!j.results || !j.results.length) {
+        box.innerHTML = '<div>Nichts gefunden</div>';
+      } else {
+        j.results.forEach(p => {
+          const d = document.createElement('div');
+          const label = [p.name, p.admin1, p.country].filter(Boolean).join(', ');
+          d.textContent = label;
+          d.onclick = () => { box.style.display = 'none'; $('q').blur(); setPlace(p.latitude, p.longitude, label); };
+          box.appendChild(d);
+        });
+      }
+    } catch (e) {
+      box.innerHTML = '<div>Suche nicht erreichbar</div>';
     }
+    box.style.display = 'block';
+  }
+
+  function locate() {
+    if (!navigator.geolocation) { $('status').textContent = 'Standortabfrage nicht verfügbar – Ort suchen oder Karte antippen.'; return; }
+    $('status').textContent = 'Standort wird ermittelt …';
+    navigator.geolocation.getCurrentPosition(
+      p => setPlace(p.coords.latitude, p.coords.longitude, 'Mein Standort'),
+      () => { $('status').textContent = 'Standort nicht erlaubt – Ort suchen oder Karte antippen.'; },
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 120000 });
+  }
+
+  $('btn-search').onclick = search;
+  $('q').addEventListener('keydown', e => { if (e.key === 'Enter') search(); });
+  $('btn-locate').onclick = locate;
+  $('radius-slider').addEventListener('input', e => setRadius(Number(e.target.value)));
+  $('radius-slider').addEventListener('change', fitRadius);
+  map.on('click', e => {
+    $('results').style.display = 'none';
+    setPlace(e.latlng.lat, e.latlng.lng, null, false);
   });
-  if (!best) throw new Error('keine Radar-Ebene gefunden');
-  return best;
-}
 
-function clearFrames() {
-  frames.forEach(f => map.removeLayer(f.layer));
-  frames = [];
-}
-
-async function loadRadar() {
-  $('status').textContent = 'Lade Radar …';
-  try {
-    const { name, times } = await getTimes();
-    const end = times[times.length - 1];
-    const start = times[0];
-    const wanted = [];
-    const from = Date.now() - BACK_MIN * 60000;
-    for (let t = end; t >= start && t >= from; t -= STEP_MIN * 60000) wanted.unshift(t);
-    clearFrames();
-    wanted.forEach(t => {
-      const layer = L.tileLayer.wms(WMS, {
-        layers: name, format: 'image/png', transparent: true,
-        time: new Date(t).toISOString().replace('.000Z', 'Z'),
-        opacity: 0, attribution: 'Radar © DWD'
-      }).addTo(map);
-      frames.push({ t, layer });
+  // ---------- DWD-Zeitangaben ----------
+  function parseDim(text) {
+    const out = [];
+    text.split(',').forEach(part => {
+      part = part.trim();
+      if (!part) return;
+      const p = part.split('/');
+      if (p.length >= 2) {
+        const a = Date.parse(p[0]), b = Date.parse(p[1]);
+        const m = /PT(\d+)M/.exec(p[2] || '');
+        const step = (m ? +m[1] : 5) * 60000;
+        for (let t = a; t <= b; t += step) out.push(t);
+      } else out.push(Date.parse(part));
     });
-    const s = $('slider');
-    s.max = frames.length - 1;
-    idx = 0;
-    frames.forEach((f, k) => { if (f.t <= Date.now() + 150000) idx = k; }); // "jetzt"
-    show(idx);
-    const hasFc = end > Date.now() + 150000;
-    $('status').textContent = (hasFc ? 'Prognose bis ' + fmt(end) + ' Uhr' : 'Nur Messdaten bis ' + fmt(end) + ' Uhr (keine Prognose verfügbar)')
-      + ' · ' + STEP_MIN + '-Minuten-Schritte';
-    if (playing) start_();
-  } catch (e) {
-    $('status').textContent = 'Radar konnte nicht geladen werden (' + e.message + ').';
+    return out.filter(Number.isFinite).sort((x, y) => x - y);
   }
-}
 
-function show(i) {
-  frames.forEach((f, k) => f.layer.setOpacity(k === i ? OPACITY : 0));
-  idx = i;
-  $('slider').value = i;
-  const f = frames[i];
-  if (!f) return;
-  const future = f.t > Date.now() + 150000;
-  $('time').textContent = fmt(f.t) + ' Uhr' + (future ? ' (Prognose)' : '');
-}
+  async function getTimes() {
+    const r = await fetch(WMS + '?service=WMS&version=1.3.0&request=GetCapabilities');
+    const doc = new DOMParser().parseFromString(await r.text(), 'text/xml');
+    const layers = Array.from(doc.getElementsByTagName('Layer'));
+    const nameOf = l => { const n = l.querySelector(':scope > Name'); return n ? n.textContent : ''; };
+    const strip = s => s.replace(/^dwd:/, '').toLowerCase();
+    let best = null;
+    CANDIDATES.forEach(c => {
+      const l = layers.find(x => strip(nameOf(x)) === strip(c));
+      if (!l) return;
+      const dim = l.querySelector('Dimension[name="time"]') || l.querySelector('Dimension');
+      if (!dim) return;
+      const times = parseDim(dim.textContent);
+      if (!times.length) return;
+      // Ebene mit dem spätesten Zeitpunkt (= weiteste Prognose) gewinnt
+      if (!best || times[times.length - 1] > best.times[best.times.length - 1] + 60000) {
+        best = { name: nameOf(l), times };
+      }
+    });
+    if (!best) throw new Error('keine Radar-Ebene gefunden');
+    return best;
+  }
 
-function start_() {
-  stop_();
-  playing = true; $('play').textContent = '⏸';
-  timer = setInterval(() => show((idx + 1) % frames.length), 800);
-}
-function stop_() {
-  clearInterval(timer); timer = null;
-  playing = false; $('play').textContent = '▶';
-}
+  // ---------- Frames ----------
+  const fmt = ms => new Date(ms).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
 
-$('play').onclick = () => playing ? stop_() : start_();
-$('slider').oninput = e => { stop_(); show(+e.target.value); };
+  function show(i) {
+    const fr = state.frames;
+    if (!fr.length) return;
+    i = ((i % fr.length) + fr.length) % fr.length;
+    state.idx = i;
+    fr.forEach((f, k) => f.layer.setOpacity(k === i ? OPACITY : 0));
+    $('timeline').value = i;
+    const t = fr[i].t;
+    $('frame-time').textContent = fmt(t) + ' Uhr';
+    const rel = Math.round((t - Date.now()) / 60000);
+    const el = $('frame-kind');
+    if (rel > 7)        { el.textContent = 'Prognose +' + rel + ' min'; el.className = 'kind-fc'; }
+    else if (rel >= -7) { el.textContent = 'Jetzt';                     el.className = 'kind-now'; }
+    else                { el.textContent = 'vor ' + (-rel) + ' min';    el.className = 'kind-past'; }
+  }
 
-function setPlace(lat, lon, zoom) {
-  marker.setLatLng([lat, lon]);
-  map.setView([lat, lon], zoom || 9);
-}
+  function nowIndex() {
+    let k = 0;
+    state.frames.forEach((f, i) => { if (f.t <= Date.now() + 7 * 60000) k = i; });
+    return k;
+  }
 
-async function search() {
-  const q = $('q').value.trim();
-  if (!q) return;
-  const r = await fetch('https://geocoding-api.open-meteo.com/v1/search?name=' +
-    encodeURIComponent(q) + '&count=5&language=de&format=json');
-  const j = await r.json();
-  const box = $('results');
-  box.innerHTML = '';
-  if (!j.results || !j.results.length) {
-    box.innerHTML = '<div>Nichts gefunden</div>';
+  async function loadRadar() {
+    try {
+      const { name, times } = await getTimes();
+      const now = Date.now();
+      // letzter Zeitpunkt, der nicht weiter als ~2 h in der Zukunft liegt
+      const cands = times.filter(t => t <= now + FWD_MIN * 60000);
+      const end = cands.length ? cands[cands.length - 1] : times[times.length - 1];
+      const start = times[0];
+      const wanted = [];
+      for (let t = end; t >= start && t >= now - BACK_MIN * 60000; t -= STEP_MIN * 60000) wanted.unshift(t);
+
+      // neue Ebenen zuerst aufbauen (vorladen), erst dann die alten entfernen -> kein Flackern
+      const prevT = state.frames[state.idx] ? state.frames[state.idx].t : null;
+      const fresh = wanted.map(t => ({
+        t,
+        layer: L.tileLayer.wms(WMS, {
+          layers: name, format: 'image/png', transparent: true, version: '1.3.0',
+          time: new Date(t).toISOString().replace('.000Z', 'Z'),
+          opacity: 0, pane: 'radar', keepBuffer: 4
+        }).addTo(map)
+      }));
+      const old = state.frames;
+      state.frames = fresh;
+      old.forEach(f => map.removeLayer(f.layer));
+
+      $('timeline').max = Math.max(0, fresh.length - 1);
+      let i = nowIndex();
+      if (prevT !== null) {            // an gleicher Zeitposition weiterlaufen
+        let best = 0;
+        fresh.forEach((f, k) => { if (Math.abs(f.t - prevT) < Math.abs(fresh[best].t - prevT)) best = k; });
+        if (Math.abs(fresh[best].t - prevT) <= STEP_MIN * 60000) i = best;
+      }
+      show(i);
+
+      const hasFc = end > now + 7 * 60000;
+      $('status').textContent = (placeLabel ? placeLabel + ' · ' : '') +
+        (hasFc ? 'Prognose bis ' + fmt(end) + ' Uhr' : 'nur Messdaten bis ' + fmt(end) + ' Uhr, keine Prognose');
+      if (state.playing && !state.timer) schedule();
+    } catch (e) {
+      $('status').textContent = 'Radar konnte nicht geladen werden (' + e.message + ').';
+    }
+  }
+
+  // ---------- Animation ----------
+  function schedule() {
+    clearTimeout(state.timer);
+    state.timer = setTimeout(() => {
+      state.timer = null;
+      if (!state.playing) return;
+      show(state.idx + 1);
+      schedule();
+    }, state.idx === state.frames.length - 1 ? 1800 : 700);
+  }
+  function play()  { state.playing = true;  $('btn-play').textContent = '⏸'; schedule(); }
+  function pause() { state.playing = false; $('btn-play').textContent = '▶'; clearTimeout(state.timer); state.timer = null; }
+  $('btn-play').onclick = () => state.playing ? pause() : play();
+  $('timeline').addEventListener('input', e => { pause(); show(Number(e.target.value)); });
+
+  // ---------- Start ----------
+  setRadius(state.radius);
+  let saved = null;
+  try { saved = JSON.parse(store.get('rr_place')); } catch (e) {}
+  if (saved && Number.isFinite(saved.lat)) {
+    setPlace(saved.lat, saved.lon, saved.label || null);
   } else {
-    j.results.forEach(p => {
-      const d = document.createElement('div');
-      d.textContent = [p.name, p.admin1, p.country].filter(Boolean).join(', ');
-      d.onclick = () => { setPlace(p.latitude, p.longitude); box.style.display = 'none'; };
-      box.appendChild(d);
-    });
+    setPlace(DEFAULT_PLACE.lat, DEFAULT_PLACE.lon, DEFAULT_PLACE.label);
+    locate();                                   // beim ersten Start einmal nach dem Standort fragen
   }
-  box.style.display = 'block';
-}
-$('go').onclick = search;
-$('q').addEventListener('keydown', e => { if (e.key === 'Enter') search(); });
-$('loc').onclick = () => {
-  if (!navigator.geolocation) return;
-  navigator.geolocation.getCurrentPosition(
-    p => setPlace(p.coords.latitude, p.coords.longitude),
-    () => { $('status').textContent = 'Standort nicht verfügbar.'; });
-};
-
-loadRadar();
-setInterval(loadRadar, 5 * 60000); // alle 5 Minuten neu laden
+  loadRadar();
+  setInterval(loadRadar, 5 * 60 * 1000);        // alle 5 Minuten auffrischen, ohne Sprung
+})();
 </script>
 </body>
 </html>
