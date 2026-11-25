@@ -54,9 +54,10 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 const WMS = 'https://maps.dwd.de/geoserver/dwd/wms';
-const LAYER = 'dwd:Niederschlagsradar';
+// Kandidaten: Radar mit Vorhersage zuerst, reines Messradar nur als Rückfall
+const CANDIDATES = ['dwd:Radar_rv_product_1x1km_ger', 'dwd:Radar_wn-product_1x1km_ger', 'dwd:Niederschlagsradar'];
 const STEP_MIN = 15;      // Schrittweite
-const BACK_STEPS = 8;     // 8 x 15 min = 2 Stunden zurück
+const BACK_MIN = 60;      // 1 Stunde zurück, dazu bis zu 2 Stunden Prognose
 const OPACITY = 0.75;
 
 const map = L.map('map', { zoomControl: true }).setView([54.09, 12.13], 8); // Rostock
@@ -92,12 +93,23 @@ async function getTimes() {
   const doc = new DOMParser().parseFromString(await r.text(), 'text/xml');
   const layers = Array.from(doc.getElementsByTagName('Layer'));
   const nameOf = l => { const n = l.querySelector(':scope > Name'); return n ? n.textContent : ''; };
-  let l = layers.find(x => nameOf(x) === LAYER) ||
-          layers.find(x => /niederschlagsradar/i.test(nameOf(x)));
-  if (!l) throw new Error('Radar-Ebene nicht gefunden');
-  const dim = l.querySelector('Dimension[name="time"]') || l.querySelector('Dimension');
-  if (!dim) throw new Error('Keine Zeitangaben gefunden');
-  return { name: nameOf(l), times: parseDim(dim.textContent) };
+  // Name kann mit oder ohne Präfix "dwd:" erscheinen
+  const strip = s => s.replace(/^dwd:/, '').toLowerCase();
+  let best = null;
+  CANDIDATES.forEach(c => {
+    const l = layers.find(x => strip(nameOf(x)) === strip(c));
+    if (!l) return;
+    const dim = l.querySelector('Dimension[name="time"]') || l.querySelector('Dimension');
+    if (!dim) return;
+    const times = parseDim(dim.textContent);
+    if (!times.length) return;
+    // Ebene mit dem spätesten Zeitpunkt (= weiteste Prognose) gewinnt
+    if (!best || times[times.length - 1] > best.times[best.times.length - 1] + 60000) {
+      best = { name: nameOf(l), times };
+    }
+  });
+  if (!best) throw new Error('keine Radar-Ebene gefunden');
+  return best;
 }
 
 function clearFrames() {
@@ -112,11 +124,8 @@ async function loadRadar() {
     const end = times[times.length - 1];
     const start = times[0];
     const wanted = [];
-    for (let k = BACK_STEPS; k >= 0; k--) {
-      const t = end - k * STEP_MIN * 60000;
-      if (t >= start) wanted.push(t);
-    }
-    // Zeiten in der Zukunft (falls vorhanden) bleiben im Schrittmaß enthalten
+    const from = Date.now() - BACK_MIN * 60000;
+    for (let t = end; t >= start && t >= from; t -= STEP_MIN * 60000) wanted.unshift(t);
     clearFrames();
     wanted.forEach(t => {
       const layer = L.tileLayer.wms(WMS, {
@@ -128,9 +137,12 @@ async function loadRadar() {
     });
     const s = $('slider');
     s.max = frames.length - 1;
-    idx = frames.length - 1;
+    idx = 0;
+    frames.forEach((f, k) => { if (f.t <= Date.now() + 150000) idx = k; }); // "jetzt"
     show(idx);
-    $('status').textContent = 'Stand: ' + fmt(end) + ' Uhr · ' + STEP_MIN + '-Minuten-Schritte';
+    const hasFc = end > Date.now() + 150000;
+    $('status').textContent = (hasFc ? 'Prognose bis ' + fmt(end) + ' Uhr' : 'Nur Messdaten bis ' + fmt(end) + ' Uhr (keine Prognose verfügbar)')
+      + ' · ' + STEP_MIN + '-Minuten-Schritte';
     if (playing) start_();
   } catch (e) {
     $('status').textContent = 'Radar konnte nicht geladen werden (' + e.message + ').';
